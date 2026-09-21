@@ -1,0 +1,8 @@
+GPIO 11 -> R u RGB
+GPIO 12 -> G u RGB
+GPIO 13 -> B u RGB
+RGB LED -> GND
+GPIO 18 -> CLK (enkóder)
+GPIO 19 -> DT (enkóder)
+GPIO 20 -> SW (enkóder)
++3.3V -> enkóder -> GND

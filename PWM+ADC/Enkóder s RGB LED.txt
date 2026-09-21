@@ -1,0 +1,1 @@
+Zapojení funguje jednoduše, snímáme hodnoty z enkóderu a tím měníme hodnoty R, G a B. Tlačítkem na enkóderu přepínáme mezi samostatnými R, G a B. Hodnoty jsou stropované minimálně 0 a maximálně 255.
