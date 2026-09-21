@@ -1,0 +1,128 @@
+Sekvence nebyla plně funkční (skok ze zelené na červenou): 
+from machine import Pin
+from time import sleep
+
+
+cervena = Pin(10, Pin.OUT)
+zluta = Pin(11, Pin.OUT)
+zelena = Pin(12, Pin.OUT)
+
+
+tlacitko = Pin(13, Pin.IN, Pin.PULL_UP)
+
+
+cervena.off()
+zluta.off()
+zelena.on()
+
+stav = 0
+
+
+def cekej_na_pusteni():
+    while tlacitko.value() == 0:
+        sleep(0.01)
+
+
+while True:
+
+    if tlacitko.value() == 0:
+
+        sleep(0.05)
+
+        if tlacitko.value() == 0:
+
+            if stav == 0:
+
+                zelena.off()
+
+                cervena.on()
+                sleep(1)
+
+                cervena.off()
+                zluta.on()
+                sleep(1)
+
+                zluta.off()
+                zelena.on()
+
+                stav = 1
+
+            else:
+
+                zelena.off()
+
+                zluta.on()
+                sleep(1)
+
+                zluta.off()
+                cervena.on()
+                sleep(1)
+
+                cervena.off()
+                zelena.on()
+
+                stav = 0
+
+            cekej_na_pusteni()
+
+
+
+
+
+
+Opravený a funkční kód - použil jsem ChatGPT:
+
+from machine import Pin
+from time import sleep
+
+cervena = Pin(10, Pin.OUT)
+zluta = Pin(11, Pin.OUT)
+zelena = Pin(12, Pin.OUT)
+
+tlacitko = Pin(13, Pin.IN, Pin.PULL_UP)
+
+cervena.off()
+zluta.off()
+zelena.on()
+
+stav = 0
+
+def cekej_na_pusteni():
+    while tlacitko.value() == 0:
+        sleep(0.01)
+
+while True:
+
+    if tlacitko.value() == 0:
+        sleep(0.05)  # odrušení zákmitů
+
+        if tlacitko.value() == 0:
+
+            if stav == 0:
+
+                zelena.off()
+
+                zluta.on()
+                sleep(1)
+
+                zluta.off()
+
+                cervena.on()
+
+                stav = 1
+
+            else:
+
+                cervena.off()
+
+                zluta.on()
+                sleep(1)
+
+                zluta.off()
+
+                zelena.on()
+
+                stav = 0
+
+            cekej_na_pusteni()
+

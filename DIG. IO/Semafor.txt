@@ -1,0 +1,1 @@
+Sestavil jsem semafor, s tlačítkem a 3 barevnými LED. Tlačítko přepne mezi zelenou a červenou a na chvíli se zastaví na žluté.

@@ -1,0 +1,4 @@
+GPIO10 -> 180 rezistor -> červená LED -> GND
+GPIO11 -> 180 rezistor -> žlutá LED -> GND
+GPIO12 -> 180 rezistor -> zelená LED -> GND
+GPIO13 -> tlačítko -> GND
