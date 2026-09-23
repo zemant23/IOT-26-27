@@ -1,0 +1,60 @@
+Přijímač:
+
+from machine import Pin, UART
+import time
+
+# UART0 na pinech GP0 (TX) a GP1 (RX)
+uart = UART(0, baudrate=9600, tx=Pin(0), rx=Pin(1))
+
+# 8 LED diod zapojených po sobě na pinech GP2 až GP9
+led_pins = [2, 3, 4, 5, 6, 7, 8, 9]
+leds = [Pin(p, Pin.OUT) for p in led_pins]
+
+print("Prijimac spusten. Cekam na data přes drat...")
+
+while True:
+    if uart.any():
+        data = uart.read(1)
+        hodnota = data[0]
+        
+        print("Prijata hodnota:", hodnota)
+        
+        # Rozsvícení LED podle bitů (0 až 7)
+        for i in range(8):
+            bit = (hodnota >> i) & 1
+            leds[i].value(bit)
+            
+    time.sleep(0.02)
+
+Vysílač:
+
+from machine import Pin, ADC, UART
+import time
+
+# UART0 na pinech GP0 (TX) a GP1 (RX)
+uart = UART(0, baudrate=9600, tx=Pin(0), rx=Pin(1))
+
+# Změna na funkční pin GP27 (fyzický pin 32)
+pot_pin = Pin(27, Pin.IN)
+pot = ADC(pot_pin)
+
+print("Vysilac spusten na pinu GP27...")
+
+while True:
+    # Vyhlazení šumu: průměr z 5 měření
+    suma = 0
+    for _ in range(5):
+        suma += pot.read_u16()
+        time.sleep_us(100)
+    raw_val = suma // 5
+    
+    # Přepočet na 8-bitový bajt (0-255)
+    val_8bit = raw_val >> 8
+    
+    print("Surove ADC na GP27:", raw_val, "| Odesilam bajt:", val_8bit)
+    
+    uart.write(bytes([val_8bit]))
+    time.sleep(0.1)
+
+
+

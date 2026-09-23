@@ -1,0 +1,1 @@
+Jedno raspberry vezme hodnotu z potenciometru a druhé ji převede na bitovu soustavu, která je zobrazená pomocí 8 LED.
