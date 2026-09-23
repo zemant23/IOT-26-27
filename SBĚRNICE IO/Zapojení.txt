@@ -1,0 +1,5 @@
+GP 2 -> ECHO
+GP 3 -> TRIG
+GP 4 -> SDA (LCD)
+GP 5 -> SCL (LCD)
+VBUS -> VCC

@@ -1,0 +1,1 @@
+Ultrazvukový senzor jsem se snažil využit přes I2C sběrnici, ale taková možnost není. I2C jsem využil u LCD displeje kde se vypisuje hodnota z ultrazvukového senzoru.

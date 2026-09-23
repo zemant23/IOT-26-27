@@ -1,0 +1,131 @@
+Ladil jsem hlavně zapojování.
+
+
+from machine import Pin, I2C
+import time
+
+class LcdApi:
+    def __init__(self, num_lines, num_columns):
+        self.num_lines = num_lines
+        self.num_columns = num_columns
+    def clear(self):
+        self.hal_write_command(0x01)
+        time.sleep_ms(2)
+    def move_to(self, cursor_x, cursor_y):
+        addr = cursor_x
+        if cursor_y == 1: addr += 0x40
+        elif cursor_y == 2: addr += 0x14
+        elif cursor_y == 3: addr += 0x54
+        self.hal_write_command(0x80 | addr)
+    def putstr(self, string):
+        for char in string: self.hal_write_data(ord(char))
+
+class PicoI2cLcd(LcdApi):
+    def __init__(self, i2c, i2c_addr, num_lines, num_columns):
+        self.i2c = i2c
+        self.i2c_addr = i2c_addr
+        self.lcd_strobe = 0x04
+        self.lcd_backlight = 0x08
+        super().__init__(num_lines, num_columns)
+        time.sleep_ms(50)
+        self.hal_write_init_nibble(0x30)
+        time.sleep_ms(5)
+        self.hal_write_init_nibble(0x30)
+        time.sleep_ms(1)
+        self.hal_write_init_nibble(0x30)
+        self.hal_write_init_nibble(0x20)
+        self.hal_write_command(0x28)
+        self.hal_write_command(0x0C)
+        self.hal_write_command(0x06)
+        self.clear()
+    def hal_write_init_nibble(self, nibble):
+        try:
+            self.i2c.writeto(self.i2c_addr, bytes([nibble | self.lcd_backlight]))
+            time.sleep_us(50)
+            self.i2c.writeto(self.i2c_addr, bytes([nibble | self.lcd_strobe | self.lcd_backlight]))
+            time.sleep_us(50)
+            self.i2c.writeto(self.i2c_addr, bytes([nibble | self.lcd_backlight]))
+            time.sleep_us(50)
+        except:
+            pass
+    def hal_write_command(self, cmd):
+        self.hal_write_nested(cmd & 0xF0, (cmd << 4) & 0xF0)
+    def hal_write_data(self, data):
+        self.hal_write_nested((data & 0xF0) | 0x01, ((data << 4) & 0xF0) | 0x01)
+    def hal_write_nested(self, high, low):
+        try:
+            for nibble in (high, low):
+                self.i2c.writeto(self.i2c_addr, bytes([nibble | self.lcd_backlight]))
+                time.sleep_us(20)
+                self.i2c.writeto(self.i2c_addr, bytes([nibble | self.lcd_strobe | self.lcd_backlight]))
+                time.sleep_us(20)
+                self.i2c.writeto(self.i2c_addr, bytes([nibble | self.lcd_backlight]))
+                time.sleep_us(40)
+        except:
+            pass
+
+i2c = I2C(0, sda=Pin(4), scl=Pin(5), freq=100000)
+
+scan_res = i2c.scan()
+if len(scan_res) == 0:
+    print("Displej stale nenalezen hardwarove!")
+    LCD_ADDR = 0x27
+else:
+    # OPRAVA: Vytáhneme z pole konkrétní číslo adresy
+    LCD_ADDR = scan_res[0]
+    print("Inicializace displeje na adrese:", hex(LCD_ADDR))
+
+lcd = PicoI2cLcd(i2c, LCD_ADDR, 2, 16)
+lcd.clear()
+lcd.putstr("Start...")
+time.sleep(1)
+
+trig = Pin(2, Pin.OUT)
+echo = Pin(3, Pin.IN)
+
+def read_distance():
+    trig.low()
+    time.sleep_us(2)
+    trig.high()
+    time.sleep_us(10)
+    trig.low()
+    
+    timeout_start = time.ticks_us()
+    while echo.value() == 0:
+        if time.ticks_diff(time.ticks_us(), timeout_start) > 20000:
+            return None
+            
+    t_start = time.ticks_us()
+    
+    while echo.value() == 1:
+        if time.ticks_diff(time.ticks_us(), t_start) > 25000:
+            return None
+            
+    t_end = time.ticks_us()
+    duration = time.ticks_diff(t_end, t_start)
+    distance_cm = duration / 58.3
+    
+    if 2 <= distance_cm <= 400:
+        return distance_cm
+    return None
+
+lcd.clear()
+
+while True:
+    distance = read_distance()
+
+    if distance is not None:
+        lcd.move_to(0, 0)
+        lcd.putstr("Vzdalenost:     ") 
+        lcd.move_to(0, 1)
+        lcd.putstr("{:.1f} cm        ".format(distance))
+    else:
+        lcd.move_to(0, 0)
+        lcd.putstr("Mimo rozsah!    ")
+        lcd.move_to(0, 1)
+        lcd.putstr("Chyba senzoru   ")
+
+    time.sleep(0.15)
+
+
+
