@@ -1,0 +1,479 @@
+HLAVNÍ
+
+
+# PANEL (Pico W #1) - MicroPython
+# LCD 1602 I2C, TM1637, enkoder, 2 tlacitka. Komunikace s nodem pres UDP.
+import network, socket, time, json, machine
+from machine import Pin, I2C
+
+# ---------------- konfigurace ----------------
+AP_SSID = "PicoPanel"      # nazev site, kterou panel vytvori
+AP_PASS = "pico12345"      # min. 8 znaku (stejne v node_pico/main.py)
+PORT_CMD = 5006      # panel -> node
+PORT_STAT = 5005     # node -> panel
+LCD_ADDR = 0x27
+ENC_REVERSE = False  # kdyz se enkoder toci obracene, dej True
+
+# Cisla jsou GPIO. V zavorce je fyzicky pin na desce Pico W.
+PIN_BTN_LIGHT = 2    # fyz. pin 4
+PIN_BTN_FAN = 3      # fyz. pin 5
+PIN_ENC_SW = 11      # fyz. pin 15
+PIN_ENC_DT = 12      # fyz. pin 16
+PIN_ENC_CLK = 13     # fyz. pin 17
+PIN_TM_DIO = 18      # fyz. pin 24
+PIN_TM_CLK = 19      # fyz. pin 25
+PIN_SDA = 16         # fyz. pin 21  (I2C0 SDA)
+PIN_SCL = 17         # fyz. pin 22  (I2C0 SCL)
+
+# ---------------- LCD 1602 (PCF8574) ----------------
+class LCD:
+    def __init__(self, i2c, addr=0x27):
+        self.i2c, self.addr, self.bl = i2c, addr, 0x08
+        self.cache = ["", ""]
+        time.sleep_ms(50)
+        for n in (3, 3, 3, 2):
+            self._nib(n, 0)
+            time.sleep_ms(5)
+        for c in (0x28, 0x0C, 0x06, 0x01):
+            self.cmd(c)
+            time.sleep_ms(3)
+
+    def _nib(self, n, rs):
+        b = (n << 4) | self.bl | rs
+        self.i2c.writeto(self.addr, bytes([b | 4]))
+        self.i2c.writeto(self.addr, bytes([b & ~4]))
+
+    def cmd(self, c):
+        self._nib(c >> 4, 0)
+        self._nib(c & 15, 0)
+
+    def put(self, row, text):
+        text = ("%-16s" % text)[:16]
+        if text == self.cache[row]:
+            return
+        self.cache[row] = text
+        self.cmd(0x80 | (0x40 if row else 0))
+        for ch in text:
+            c = ord(ch)
+            self._nib(c >> 4, 1)
+            self._nib(c & 15, 1)
+
+# ---------------- TM1637 ----------------
+SEG = {'0': 0x3F, '1': 0x06, '2': 0x5B, '3': 0x4F, '4': 0x66, '5': 0x6D,
+       '6': 0x7D, '7': 0x07, '8': 0x7F, '9': 0x6F, '-': 0x40, ' ': 0x00}
+
+class TM1637:
+    def __init__(self, clk, dio, brightness=3):
+        self.clk = Pin(clk, Pin.OUT, value=1)
+        self.dio = Pin(dio, Pin.OUT, value=1)
+        self.br = brightness
+        self.last = None
+
+    def _d(self):
+        time.sleep_us(10)
+
+    def _start(self):
+        self.clk(1); self.dio(1); self._d()
+        self.dio(0); self._d(); self.clk(0); self._d()
+
+    def _stop(self):
+        self.clk(0); self._d(); self.dio(0); self._d()
+        self.clk(1); self._d(); self.dio(1); self._d()
+
+    def _wb(self, b):
+        for i in range(8):
+            self.clk(0)
+            self.dio((b >> i) & 1)
+            self._d()
+            self.clk(1)
+            self._d()
+        self.clk(0); self._d()      # ACK ignorujeme
+        self.clk(1); self._d()
+        self.clk(0); self._d()
+
+    def write(self, segs):
+        if segs == self.last:
+            return
+        self.last = list(segs)
+        self._start(); self._wb(0x40); self._stop()
+        self._start(); self._wb(0xC0)
+        for s in segs:
+            self._wb(s)
+        self._stop()
+        self._start(); self._wb(0x88 | self.br); self._stop()
+
+    def text(self, s):
+        segs = []
+        for ch in s:
+            if ch == '.' and segs:
+                segs[-1] |= 0x80
+            else:
+                segs.append(SEG.get(ch, 0))
+        segs = ([0] * (4 - len(segs)) + segs)[-4:]
+        self.write(segs)
+
+# ---------------- vstupy ----------------
+class Encoder:
+    T = (0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0)
+
+    def __init__(self, clk, dt):
+        self.clk = Pin(clk, Pin.IN, Pin.PULL_UP)
+        self.dt = Pin(dt, Pin.IN, Pin.PULL_UP)
+        self.old = (self.clk() << 1) | self.dt()
+        self.acc = 0
+        self.steps = 0
+        for p in (self.clk, self.dt):
+            p.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=self._isr)
+
+    def _isr(self, _):
+        new = (self.clk() << 1) | self.dt()
+        self.acc += self.T[(self.old << 2) | new]
+        self.old = new
+        if self.acc >= 4:
+            self.steps += 1
+            self.acc = 0
+        elif self.acc <= -4:
+            self.steps -= 1
+            self.acc = 0
+
+    def delta(self):
+        s = machine.disable_irq()
+        d = self.steps
+        self.steps = 0
+        machine.enable_irq(s)
+        return -d if ENC_REVERSE else d
+
+class Btn:
+    def __init__(self, pin):
+        self.p = Pin(pin, Pin.IN, Pin.PULL_UP)
+        self.last = 1
+        self.t = 0
+
+    def pressed(self):
+        v, now = self.p.value(), time.ticks_ms()
+        if v != self.last and time.ticks_diff(now, self.t) > 30:
+            self.last, self.t = v, now
+            return v == 0
+        return False
+
+# ---------------- sit ----------------
+def ap_start():
+    ap = network.WLAN(network.AP_IF)
+    ap.config(essid=AP_SSID, password=AP_PASS)
+    ap.active(True)
+    while not ap.active():
+        time.sleep_ms(100)
+    return ap
+
+def bcast(wlan):
+    ip, mask, _, _ = wlan.ifconfig()
+    i = [int(x) for x in ip.split('.')]
+    m = [int(x) for x in mask.split('.')]
+    return '.'.join(str(i[k] | (255 - m[k])) for k in range(4))
+
+# ---------------- menu ----------------
+MODES = ["VYP", "ZAP", "AUTO"]
+COLORS = ["Teple bila", "Studena", "Cervena", "Zelena", "Modra", "Fialova"]
+ITEMS = [("Prehled", None), ("Ventilator", "fm"), ("Vykon vent.", "fs"),
+         ("Prah teploty", "ft"), ("Svetlo", "lm"), ("Jas svetla", "lb"),
+         ("Barva svetla", "lc")]
+cfg = {"fm": 2, "fs": 70, "ft": 28.0, "lm": 2, "lb": 60, "lc": 0}
+
+def fmt(key, v):
+    if key in ("fm", "lm"): return MODES[v]
+    if key in ("fs", "lb"): return "%d %%" % v
+    if key == "ft": return "%.1f C" % v
+    if key == "lc": return COLORS[v]
+    return ""
+
+def adjust(key, v, d):
+    if key in ("fm", "lm"): return (v + d) % 3
+    if key in ("fs", "lb"): return max(0, min(100, v + 5 * d))
+    if key == "ft": return max(15.0, min(40.0, v + 0.5 * d))
+    if key == "lc": return (v + d) % len(COLORS)
+    return v
+
+# ---------------- main ----------------
+i2c = I2C(0, sda=Pin(PIN_SDA), scl=Pin(PIN_SCL), freq=100000)
+lcd = LCD(i2c, LCD_ADDR)
+tm = TM1637(PIN_TM_CLK, PIN_TM_DIO)
+enc = Encoder(PIN_ENC_CLK, PIN_ENC_DT)
+sw = Btn(PIN_ENC_SW)
+b_light = Btn(PIN_BTN_LIGHT)
+b_fan = Btn(PIN_BTN_FAN)
+
+lcd.put(0, "Startuji WiFi AP")
+tm.text("----")
+wlan = ap_start()   # panel = pristupovy bod (192.168.4.1)
+rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+rx.bind(("0.0.0.0", PORT_STAT))
+rx.setblocking(False)
+tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+st = None
+node_addr = None   # IP nodu, zjisti se z prvniho stavoveho paketu
+last_rx = -10000
+last_tx = 0
+send_now = True
+sel = 0
+editing = False
+
+def send_cfg():
+    try:
+        tx.sendto(json.dumps(cfg).encode(), (node_addr or bcast(wlan), PORT_CMD))
+    except OSError:
+        pass
+
+while True:
+    now = time.ticks_ms()
+
+    # prijem stavu
+    try:
+        data, addr = rx.recvfrom(256)
+        st = json.loads(data)
+        node_addr = addr[0]
+        last_rx = now
+    except (OSError, ValueError):
+        pass
+
+    # vstupy
+    d = enc.delta()
+    if d:
+        key = ITEMS[sel][1]
+        if editing and key:
+            cfg[key] = adjust(key, cfg[key], d)
+            send_now = True
+        elif not editing:
+            sel = (sel + d) % len(ITEMS)
+    if sw.pressed() and ITEMS[sel][1]:
+        editing = not editing
+        send_now = True
+    if b_light.pressed():
+        cfg["lm"] = 1 if cfg["lm"] == 0 else 0
+        send_now = True
+    if b_fan.pressed():
+        cfg["fm"] = 1 if cfg["fm"] == 0 else 0
+        send_now = True
+
+    # odeslani configu (zmena + heartbeat 1 s)
+    if send_now or time.ticks_diff(now, last_tx) > 1000:
+        send_cfg()
+        last_tx = now
+        send_now = False
+
+    # zobrazeni
+    linked = st is not None and time.ticks_diff(now, last_rx) < 5000
+    name, key = ITEMS[sel]
+    if key is None:
+        if linked:
+            dist = ("%dcm" % st["d"]) if st["d"] >= 0 else "--"
+            lcd.put(0, "%.1fC %d%% %s" % (st["t"], st["h"], dist))
+            lcd.put(1, "V:%d%% S:%s" % (st["fan"], "ON" if st["lt"] else "OFF"))
+        else:
+            lcd.put(0, "Prehled")
+            lcd.put(1, "BEZ SPOJENI")
+    else:
+        lcd.put(0, name)
+        lcd.put(1, ("*" if editing else ">") + fmt(key, cfg[key]))
+
+    if linked and st.get("t") is not None:
+        tm.text("%.1f" % st["t"])
+    else:
+        tm.text("----")
+
+    time.sleep_ms(20)
+
+
+
+
+
+MODULY - VEDLEJŠÍ
+
+
+
+
+# NODE (Pico W #2) - MicroPython
+# DHT22, HC-SR04, fotorezistor, ventilator (H-bridge), NeoPixel ring.
+import network, socket, time, json, machine, dht, neopixel
+from machine import Pin, PWM, ADC, time_pulse_us
+
+# ---------------- konfigurace ----------------
+AP_SSID = "PicoPanel"      # musi byt stejne jako v panel_pico/main.py
+AP_PASS = "pico12345"
+PORT_CMD = 5006      # panel -> node
+PORT_STAT = 5005     # node -> panel
+
+NUM_LEDS = 12        # pocet LED na ringu (uprav podle sveho)
+DARK_ON = 25         # % svetla: pod timto je "tma"
+DARK_OFF = 40        # % svetla: nad timto je "svetlo"
+PRESENCE_CM = 150    # osoba bliz nez
+PRESENCE_HOLD_MS = 30000
+
+# Cisla jsou GPIO. V zavorce je fyzicky pin na desce Pico W.
+PIN_RING = 2         # fyz. pin 4
+PIN_DHT = 3          # fyz. pin 5
+PIN_ECHO = 4         # fyz. pin 6
+PIN_TRIG = 5         # fyz. pin 7
+PIN_FAN_A1 = 7       # fyz. pin 10
+PIN_FAN_A2 = 8       # fyz. pin 11
+
+# Fotorezistor: fyz. pin 9 = GP6 NEMA ADC (jen digital).
+LDR_DIGITAL = False  # True = modul s DO vystupem na GP6 (fyz. pin 9)
+PIN_LDR = 26         # analog: GP26 = fyz. pin 31 (dopojit misto pinu 9)
+LDR_DO_DARK = 1      # jakou hodnotu dava DO modul ve tme (zkus 0/1)
+
+COLORS = [(255, 170, 80), (200, 220, 255), (255, 0, 0),
+          (0, 255, 0), (0, 0, 255), (160, 0, 255)]
+
+# ---------------- hardware ----------------
+ring = neopixel.NeoPixel(Pin(PIN_RING), NUM_LEDS)
+sensor = dht.DHT22(Pin(PIN_DHT))
+trig = Pin(PIN_TRIG, Pin.OUT, value=0)
+echo = Pin(PIN_ECHO, Pin.IN)
+if LDR_DIGITAL:
+    ldr_d = Pin(6, Pin.IN)
+else:
+    ldr = ADC(PIN_LDR)
+
+def read_lux():
+    if LDR_DIGITAL:
+        return 0 if ldr_d.value() == LDR_DO_DARK else 100
+    return ldr.read_u16() * 100 // 65535
+fan_pwm = PWM(Pin(PIN_FAN_A1), freq=1000, duty_u16=0)
+fan_a2 = Pin(PIN_FAN_A2, Pin.OUT, value=0)
+
+cfg = {"fm": 2, "fs": 70, "ft": 28.0, "lm": 2, "lb": 60, "lc": 0}
+
+def distance_cm():
+    trig(0); time.sleep_us(2)
+    trig(1); time.sleep_us(10)
+    trig(0)
+    t = time_pulse_us(echo, 1, 30000)
+    if t < 0:
+        return -1
+    return int(t * 0.0343 / 2)
+
+def set_fan(pct):
+    fan_a2(0)
+    fan_pwm.duty_u16(pct * 65535 // 100)
+
+def set_ring(on):
+    if on:
+        c = COLORS[cfg["lc"] % len(COLORS)]
+        col = tuple(v * cfg["lb"] // 100 for v in c)
+    else:
+        col = (0, 0, 0)
+    if ring[0] != col:
+        for i in range(NUM_LEDS):
+            ring[i] = col
+        ring.write()
+
+# ---------------- sit ----------------
+def wifi_connect():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(AP_SSID, AP_PASS)
+    t = time.ticks_ms()
+    while not wlan.isconnected():
+        if time.ticks_diff(time.ticks_ms(), t) > 20000:
+            machine.reset()
+        time.sleep_ms(200)
+    return wlan
+
+def bcast(wlan):
+    ip, mask, _, _ = wlan.ifconfig()
+    i = [int(x) for x in ip.split('.')]
+    m = [int(x) for x in mask.split('.')]
+    return '.'.join(str(i[k] | (255 - m[k])) for k in range(4))
+
+wlan = wifi_connect()
+rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+rx.bind(("0.0.0.0", PORT_CMD))
+rx.setblocking(False)
+tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+# ---------------- stav ----------------
+temp = None
+hum = 0
+dist = -1
+lux = read_lux()
+dark = lux < DARK_ON
+fan_on = False
+fan_pct = 0
+light_on = False
+last_presence = -PRESENCE_HOLD_MS
+t_dht = t_dist = t_stat = t_wifi = time.ticks_add(time.ticks_ms(), -10000)
+
+while True:
+    now = time.ticks_ms()
+
+    # prikazy z panelu
+    try:
+        data, _ = rx.recvfrom(256)
+        c = json.loads(data)
+        for k in cfg:
+            if k in c:
+                cfg[k] = c[k]
+    except (OSError, ValueError):
+        pass
+
+    # senzory
+    if time.ticks_diff(now, t_dht) >= 3000:
+        t_dht = now
+        try:
+            sensor.measure()
+            temp, hum = sensor.temperature(), int(sensor.humidity())
+        except OSError:
+            pass
+
+    if time.ticks_diff(now, t_dist) >= 200:
+        t_dist = now
+        dist = distance_cm()
+        if 2 <= dist <= PRESENCE_CM:
+            last_presence = now
+
+    lux = (lux * 7 + read_lux()) // 8
+    if lux < DARK_ON:
+        dark = True
+    elif lux > DARK_OFF:
+        dark = False
+
+    # ventilator
+    if cfg["fm"] == 0:
+        fan_on = False
+    elif cfg["fm"] == 1:
+        fan_on = True
+    elif temp is not None:
+        if temp >= cfg["ft"]:
+            fan_on = True
+        elif temp <= cfg["ft"] - 1:
+            fan_on = False
+    fan_pct = cfg["fs"] if fan_on else 0
+    set_fan(fan_pct)
+
+    # osvetleni
+    if cfg["lm"] == 0:
+        light_on = False
+    elif cfg["lm"] == 1:
+        light_on = True
+    else:
+        present = time.ticks_diff(now, last_presence) < PRESENCE_HOLD_MS
+        light_on = dark and present
+    set_ring(light_on)
+
+    # stav zpet na panel (1 s)
+    if time.ticks_diff(now, t_stat) >= 1000:
+        t_stat = now
+        status = {"t": temp if temp is not None else 0.0, "h": hum, "d": dist,
+                  "l": lux, "fan": fan_pct, "lt": 1 if light_on else 0}
+        try:
+            tx.sendto(json.dumps(status).encode(), (wlan.ifconfig()[2], PORT_STAT))  # brana = panel
+        except OSError:
+            pass
+
+    # obnova Wi-Fi
+    if not wlan.isconnected() and time.ticks_diff(now, t_wifi) >= 10000:
+        t_wifi = now
+        wlan.connect(AP_SSID, AP_PASS)
+
+    time.sleep_ms(50)

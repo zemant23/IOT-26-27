@@ -1,0 +1,33 @@
+==================== PICO W #1 (PANEL) ====================
+
+ LEVÁ STRANA                                 PRAVÁ STRANA
+
+ Tlačítko světlo ---- pin 4     [PICO]   pin 21 ---- LCD SDA
+ Tlačítko větrák ---- pin 5     [ W#1]   pin 22 ---- LCD SCL
+ Enkodér SW      ---- pin 15    [    ]   pin 24 ---- 7seg DIO
+ Enkodér DT      ---- pin 16    [    ]   pin 25 ---- 7seg CLK
+ Enkodér CLK     ---- pin 17    [    ]
+
+ NAPÁJENÍ:
+   GND  (pin 13, 38) -> druhý vývod obou tlačítek, enkodér GND,
+                        7seg GND, LCD GND
+   3V3  (pin 36)     -> enkodér +, 7seg VCC
+   5 V  (pin 40)     -> LCD VCC
+
+
+==================== PICO W #2 (NODE) =====================
+
+ NeoPixel ring DIN ------------- pin 4
+ DHT22 DATA -------------------- pin 5
+ HC-SR04 ECHO ------------------ pin 6
+                      +--------- GND        (dělič, nutný!)
+ HC-SR04 TRIG ------------------ pin 7
+ Fotorezistor (modul DO) ------- pin 9
+ Driver motoru A1 -------------- pin 10
+ Driver motoru A2 -------------- pin 11
+
+ NAPÁJENÍ:
+   GND  (pin 3, 8, 13 ...) -> všechny součástky + GND driveru motoru
+   3V3  (pin 36)           -> DHT22, fotorezistor
+   5 V  (pin 40)           -> ring, HC-SR04
+   Motor: vlastní zdroj přes driver, ne z Pica

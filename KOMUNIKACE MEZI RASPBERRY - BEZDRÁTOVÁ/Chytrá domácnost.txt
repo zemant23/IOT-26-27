@@ -1,0 +1,1 @@
+Bezdrátová komunikace dvou Raspberry Pi Pico W 2022, kde první pico má na starosti řízení domácnosti a druhé pico slouží jako výstupní moduly. Viz. světla, ventilátor, čidlo světla a alarm. 
