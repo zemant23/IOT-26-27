@@ -1,0 +1,1 @@
+Ultazvukový senzor změní vzdálenost - LCD ji vypíše a text LCD můžeme změnit v dashboardu. Sběrnicový vstup nemáme z důvodu, že není k dispozici.

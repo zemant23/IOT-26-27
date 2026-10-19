@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="cs"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pi Dashboard</title>
+<style>
+:root{--bg:#0e1116;--card:#171b22;--line:#262c36;--tx:#e6e9ef;--mut:#8b93a1;--ac:#4ade80}
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--tx);display:flex;min-height:100vh}
+aside{width:250px;background:var(--card);border-right:1px solid var(--line);padding:20px;flex-shrink:0}
+aside h1{font-size:18px;margin:0 0 20px}aside h1 span{color:var(--ac)}
+.nav{display:block;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--tx);padding:10px 12px;border-radius:8px;cursor:pointer;font:inherit;margin-bottom:4px}
+.nav.on,.nav:hover{background:#1f2530;border-color:var(--line)}
+main{flex:1;padding:28px;max-width:1000px;min-width:0}
+h2{margin:0 0 6px}p.d{color:var(--mut);line-height:1.5}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-top:18px}
+.card h3{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut)}
+.big{font:700 56px ui-monospace,monospace;color:var(--ac)}.big small{font-size:20px;color:var(--mut)}
+canvas{width:100%;height:280px;display:block}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:500}
+.btn{background:#1f2530;color:var(--tx);border:1px solid var(--line);padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit;margin-right:8px}
+.btn.on{background:var(--ac);color:#04210f;border-color:var(--ac)}
+.warn{border-left:3px solid #f59e0b;padding:8px 12px;background:#2a2112;border-radius:6px;margin-top:12px;color:#fcd9a0}
+.row{display:flex;gap:18px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+@media(max-width:700px){body{flex-direction:column}aside{width:100%}}
+</style></head><body>
+<aside><h1>🍓 Pi <span>Dashboard</span></h1><div id="nav"></div></aside>
+<main id="main"></main>
+<script>
+let projects=[],cur=null,hist=[],last=0,timer=null;
+const $=s=>document.querySelector(s);
+async function init(){
+  projects=await (await fetch('/api/projects')).json();
+  $('#nav').innerHTML=projects.map(p=>`<button class="nav" data-id="${p.id}">${p.icon} ${p.title}</button>`).join('');
+  document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>show(b.dataset.id));
+  show(projects[0].id);
+}
+function show(id){
+  cur=projects.find(p=>p.id==id);
+  document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('on',b.dataset.id==id));
+  const p=cur;
+  $('#main').innerHTML=`<h2>${p.icon} ${p.title}</h2><p class="d">${p.description}</p>
+  ${p.id=='ultrasonic'?`<div class="card"><div class="row"><div><h3>Aktuální vzdálenost</h3><div class="big"><span id="val">--</span> <small>cm</small></div></div>
+  <div><button class="btn" id="bRun"></button><button class="btn" id="bDisp"></button></div></div></div>
+  <div class="card"><h3>Vzdálenost v čase (posledních 60 s)</h3><canvas id="ch"></canvas></div>`:''}
+  <div class="card"><h3>Zapojení</h3><table><tr><th>Součástka</th><th>Pin</th><th>Připojit na</th></tr>
+  ${p.wiring.map(w=>`<tr><td>${w.part}</td><td>${w.pin}</td><td>${w.to}</td></tr>`).join('')}</table>
+  ${p.notes?`<div class="warn">${p.notes}</div>`:''}</div>`;
+  hist=[];last=0;clearInterval(timer);
+  if(p.id=='ultrasonic'){poll();timer=setInterval(poll,300);
+    $('#bRun').onclick=()=>ctl({running:!state.running});$('#bDisp').onclick=()=>ctl({display:!state.display});}
+}
+let state={running:true,display:true};
+async function ctl(b){await fetch('/api/ultrasonic/control',{method:'POST',body:JSON.stringify(b)});poll();}
+async function poll(){
+  try{const d=await (await fetch('/api/ultrasonic?since='+last)).json();
+  state=d;d.history.forEach(h=>{hist.push(h);last=h[0]});
+  const cut=Date.now()/1000-60;hist=hist.filter(h=>h[0]>cut);
+  $('#val').textContent=d.value==null?'--':d.value.toFixed(1);
+  $('#bRun').textContent=d.running?'⏸ Pozastavit měření':'▶ Spustit měření';$('#bRun').classList.toggle('on',d.running);
+  $('#bDisp').textContent=d.display?'Displej: zapnutý':'Displej: vypnutý';$('#bDisp').classList.toggle('on',d.display);
+  draw();}catch(e){}
+}
+function draw(){
+  const c=$('#ch');if(!c)return;const r=devicePixelRatio||1,W=c.clientWidth,H=c.clientHeight;
+  c.width=W*r;c.height=H*r;const x=c.getContext('2d');x.scale(r,r);
+  const L=44,B=22,T=8,now=Date.now()/1000;
+  const mx=Math.max(50,Math.ceil(Math.max(0,...hist.map(h=>h[1]))/50)*50);
+  x.font='11px system-ui';x.fillStyle='#8b93a1';x.strokeStyle='#262c36';
+  for(let i=0;i<=4;i++){const y=T+(H-T-B)*i/4;x.beginPath();x.moveTo(L,y);x.lineTo(W,y);x.stroke();x.fillText(Math.round(mx*(1-i/4))+' cm',2,y+4);}
+  for(let s=0;s<=60;s+=10){const px=L+(W-L)*(1-s/60);x.fillText(s?'-'+s+'s':'teď',px-10,H-6);}
+  if(!hist.length)return;
+  x.strokeStyle='#4ade80';x.lineWidth=2;x.beginPath();
+  hist.forEach((h,i)=>{const px=L+(W-L)*(1-(now-h[0])/60),py=T+(H-T-B)*(1-h[1]/mx);i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();
+}
+addEventListener('resize',draw);init();
+</script></body></html>

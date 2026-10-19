@@ -1,0 +1,7 @@
+Zapojení
+
+
+GP 24 - CLK
+GP 23 - DIO
+GP 17 - TRIG
+GP 18 - ECHO

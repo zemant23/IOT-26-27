@@ -1,0 +1,1 @@
+Ultrazvukový senzor změří vzdálenost před sebou a přenese jí do webové dashboardy a vypíše ji na segmentovém displeji.

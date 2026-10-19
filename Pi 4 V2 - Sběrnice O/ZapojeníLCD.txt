@@ -1,0 +1,6 @@
+Zapojení
+
+SCL - SCL
+SDA - SDA
+GP 17 - TRIG
+GP 18 - ECHO
