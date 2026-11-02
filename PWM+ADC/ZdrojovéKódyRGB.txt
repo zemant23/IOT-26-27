@@ -1,86 +1,5 @@
-První kde byly špatně nastavené piny pro RGB:
 
-from machine import Pin, PWM
-from time import sleep
-
-red = PWM(Pin(11))
-green = PWM(Pin(12))
-blue = PWM(Pin(13))
-
-red.freq(1000)
-green.freq(1000)
-blue.freq(1000)
-
-clk = Pin(18, Pin.IN, Pin.PULL_UP)
-dt = Pin(19, Pin.IN, Pin.PULL_UP)
-sw = Pin(20, Pin.IN, Pin.PULL_UP)
-
-r = 255
-g = 0
-b = 0
-
-barva = 0
-
-def nastav_rgb():
-    red.duty_u16(r * 257)
-    green.duty_u16(g * 257)
-    blue.duty_u16(b * 257)
-
-def omez(hodnota):
-    return max(0, min(255, hodnota))
-
-nastav_rgb()
-
-posledni_clk = clk.value()
-posledni_sw = sw.value()
-
-while True:
-    aktualni_clk = clk.value()
-
-    if aktualni_clk != posledni_clk:
-        if dt.value() != aktualni_clk:
-            smer = 1
-        else:
-            smer = -1
-
-        if barva == 0:
-            r = omez(r + smer)
-        elif barva == 1:
-            g = omez(g + smer)
-        else:
-            b = omez(b + smer)
-
-        nastav_rgb()
-        posledni_clk = aktualni_clk
-
-    aktualni_sw = sw.value()
-
-    if posledni_sw == 1 and aktualni_sw == 0:
-        sleep(0.05)
-
-        if sw.value() == 0:
-            barva += 1
-
-            if barva > 2:
-                barva = 0
-
-            while sw.value() == 0:
-                sleep(0.01)
-
-    posledni_sw = aktualni_sw
-
-    sleep(0.001)
-
-
-
-
-
-
-
-
-Opravený a funkční kód - pomoc od ChatGPT:
-
-from machine import Pin, PWM
+from machine import Pin, PWM, ADC
 from time import sleep
 
 red = PWM(Pin(13))
@@ -91,9 +10,8 @@ red.freq(1000)
 green.freq(1000)
 blue.freq(1000)
 
-clk = Pin(18, Pin.IN, Pin.PULL_UP)
-dt = Pin(19, Pin.IN, Pin.PULL_UP)
-sw = Pin(20, Pin.IN, Pin.PULL_UP)
+pot = ADC(26)
+sw = Pin(14, Pin.IN, Pin.PULL_UP)
 
 r = 255
 g = 0
@@ -101,51 +19,55 @@ b = 0
 
 barva = 0
 
+posledni_sw = 1
+posledni_pot = -1
+
 def nastav_rgb():
     red.duty_u16(r * 257)
     green.duty_u16(g * 257)
     blue.duty_u16(b * 257)
 
-def omez(hodnota):
-    return max(0, min(255, hodnota))
-
 nastav_rgb()
 
-posledni_clk = clk.value()
-posledni_sw = sw.value()
-
 while True:
-    aktualni_clk = clk.value()
 
-    if aktualni_clk != posledni_clk:
-        if dt.value() != aktualni_clk:
-            smer = 1
-        else:
-            smer = -1
-
-        if barva == 0:
-            r = omez(r + smer)
-        elif barva == 1:
-            g = omez(g + smer)
-        else:
-            b = omez(b + smer)
-
-        nastav_rgb()
-        posledni_clk = aktualni_clk
-
-    aktualni_sw = sw.value()
-
-    if posledni_sw == 1 and aktualni_sw == 0:
+    # Tlacitko - zmena vybrane barvy
+    if sw.value() == 0 and posledni_sw == 1:
         sleep(0.05)
 
         if sw.value() == 0:
-            barva += 1
+            barva = (barva + 1) % 3
+            posledni_pot = -1
 
-            if barva > 2:
-                barva = 0
+            if barva == 0:
+                print("Nastavujes CERVENOU")
+            elif barva == 1:
+                print("Nastavujes ZELENOU")
+            else:
+                print("Nastavujes MODROU")
 
             while sw.value() == 0:
                 sleep(0.01)
 
-    posledni_sw = aktualni_sw
-    sleep(0.001)
+    posledni_sw = sw.value()
+
+    # Potenciometr
+    hodnota = pot.read_u16()
+
+    # Zmena jen pri pohybu potenciometru
+    if abs(hodnota - posledni_pot) > 300:
+
+        jas = hodnota * 255 // 65535
+
+        if barva == 0:
+            r = jas
+        elif barva == 1:
+            g = jas
+        else:
+            b = jas
+
+        nastav_rgb()
+        posledni_pot = hodnota
+
+    sleep(0.02)
+
