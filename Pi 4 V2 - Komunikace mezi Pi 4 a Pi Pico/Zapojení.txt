@@ -1,0 +1,6 @@
+Pico Neopixel
+GP15 -> DATA (neo)
+
+Pico joystick
+GP27 -> Rx
+GP26 -> Ry

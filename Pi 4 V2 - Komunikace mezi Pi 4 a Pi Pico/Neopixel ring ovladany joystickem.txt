@@ -1,0 +1,1 @@
+Na jednom picu je jouystick a na druhém neopixel ring. Na Pi 4 v dashboardu můžeme nastavit neopixel ring, ale také můžeme povolit ovládání pomocí joysticku.

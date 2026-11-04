@@ -1,0 +1,168 @@
+ Raspberry Pi 4 
+
+
+
+
+import json
+import math
+import threading
+import time
+
+import serial
+from flask import Flask, render_template, request, jsonify
+
+# Stabilni cesty k Pickam: v terminalu spust  ls /dev/serial/by-id/
+RING_PORT = "/dev/serial/by-id/DOPLN_PICO_S_RINGEM"
+JOY_PORT = "/dev/serial/by-id/DOPLN_PICO_S_JOYSTICKEM"
+N = 8                              # pocet LED na ringu
+
+DEADZONE = 0.35   # joystick v klidu = zadna LED
+OFFSET = 0        # posun: ktera LED je "nahore" (0-7)
+FLIP = False      # True = opacny smer otaceni
+
+app = Flask(__name__)
+state = {"pixels": [[0, 0, 0] for _ in range(N)]}
+joy = {"enabled": False, "color": [255, 0, 0], "last": "reset"}
+ring = {"ser": None}
+lock = threading.Lock()
+
+
+def send_pixels(pixels):
+    state["pixels"] = pixels
+    with lock:
+        try:
+            if ring["ser"] is None:
+                ring["ser"] = serial.Serial(RING_PORT, 115200, timeout=1)
+            ring["ser"].write((json.dumps({"pixels": pixels}) + "\n").encode())
+            return True
+        except Exception as e:
+            print("Pico s ringem neodpovida:", e)
+            ring["ser"] = None
+            return False
+
+
+def joy_to_index(x, y):
+    nx = (x - 32768) / 32768
+    ny = (32768 - y) / 32768          # nahoru = kladne
+    if math.hypot(nx, ny) < DEADZONE:
+        return None
+    angle = math.atan2(nx, ny) % (2 * math.pi)   # 0 = nahoru, po smeru hodin
+    idx = round(angle / (2 * math.pi / N)) % N
+    if FLIP:
+        idx = (-idx) % N
+    return (idx + OFFSET) % N
+
+
+def joystick_loop():
+    while True:
+        try:
+            with serial.Serial(JOY_PORT, 115200, timeout=1) as ser:
+                print("Joystick pripojen:", JOY_PORT)
+                while True:
+                    line = ser.readline().decode(errors="ignore").strip()
+                    if not line.startswith("J,") or not joy["enabled"]:
+                        continue
+                    try:
+                        _, x, y = line.split(",")
+                        idx = joy_to_index(int(x), int(y))
+                    except ValueError:
+                        continue
+                    if idx == joy["last"]:
+                        continue            # posilame jen pri zmene
+                    joy["last"] = idx
+                    pixels = [[0, 0, 0] for _ in range(N)]
+                    if idx is not None:
+                        pixels[idx] = joy["color"]
+                    send_pixels(pixels)
+        except Exception as e:
+            print("Joystick chyba:", e)
+            time.sleep(2)
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/state")
+def get_state():
+    return jsonify({"n": N, "pixels": state["pixels"]})
+
+
+@app.route("/api/set", methods=["POST"])
+def set_pixels():
+    ok = send_pixels(request.get_json()["pixels"])
+    return jsonify({"ok": ok}), (200 if ok else 502)
+
+
+@app.route("/api/mode", methods=["GET", "POST"])
+def mode():
+    if request.method == "POST":
+        data = request.get_json()
+        joy["color"] = data.get("color", joy["color"])
+        was = joy["enabled"]
+        joy["enabled"] = bool(data.get("joystick", joy["enabled"]))
+        if joy["enabled"] and not was:
+            joy["last"] = "reset"
+            send_pixels([[0, 0, 0] for _ in range(N)])   # cisty start
+        elif joy["enabled"]:
+            joy["last"] = "reset"                        # prekresli s novou barvou
+    return jsonify({"joystick": joy["enabled"], "color": joy["color"]})
+
+
+if __name__ == "__main__":
+    send_pixels([[0, 0, 0] for _ in range(N)])
+    threading.Thread(target=joystick_loop, daemon=True).start()
+    app.run(host="0.0.0.0", port=5000)
+
+
+
+
+Pico Neopixel
+
+
+import sys, json, neopixel
+from machine import Pin
+
+PIN = 15          # GP15 -> DIN na ringu
+N = 8             # pocet LED na ringu
+
+np = neopixel.NeoPixel(Pin(PIN), N)
+
+
+def show(pixels):
+    for i in range(N):
+        c = pixels[i] if i < len(pixels) else (0, 0, 0)
+        np[i] = (int(c[0]), int(c[1]), int(c[2]))
+    np.write()
+
+
+show([])   # na startu vse zhasnout
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        continue
+    try:
+        show(json.loads(line)["pixels"])
+    except Exception:
+        pass
+
+
+
+
+Pico Joystick
+
+
+from machine import ADC
+import time
+
+vrx = ADC(26)   # VRx -> GP26 (ADC0)
+vry = ADC(27)   # VRy -> GP27 (ADC1)
+
+while True:
+    print("J,%d,%d" % (vrx.read_u16(), vry.read_u16()))
+    time.sleep_ms(50)
+
+
+
